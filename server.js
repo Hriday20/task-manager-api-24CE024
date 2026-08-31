@@ -1,14 +1,19 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const cors = require("cors");
 require("dotenv").config();
 
 const Task = require("./models/Task");
+const authRoutes = require("./routes/auth");
+const authMiddleware = require("./middleware/auth");
+const validateTask = require("./middleware/validateTask");
 
 const app = express();
 const PORT = process.env.PORT || 5003;
 
-// Parse JSON request bodies
+// Middleware
 app.use(express.json());
+app.use(cors());
 
 // MongoDB Connection
 mongoose
@@ -20,7 +25,7 @@ mongoose
     console.error("MongoDB Connection Error:", err);
   });
 
-// Global Request Logging Middleware
+// Logging Middleware
 app.use((req, res, next) => {
   console.log(
     `${req.method} ${req.url} - ${new Date().toISOString()}`
@@ -28,18 +33,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Content-Type Middleware for POST and PUT
-app.use((req, res, next) => {
-  if (req.method === "POST" || req.method === "PUT") {
-    if (!req.is("application/json")) {
-      return res.status(400).json({
-        error: "Content-Type must be application/json",
-      });
-    }
-  }
-
-  next();
-});
+// Public Authentication Routes
+app.use("/auth", authRoutes);
 
 // Home Route
 app.get("/", (req, res) => {
@@ -48,8 +43,12 @@ app.get("/", (req, res) => {
   });
 });
 
+// =========================
+// PROTECTED TASK ROUTES
+// =========================
+
 // GET All Tasks
-app.get("/tasks", async (req, res, next) => {
+app.get("/tasks", authMiddleware, async (req, res, next) => {
   try {
     const tasks = await Task.find();
 
@@ -59,8 +58,8 @@ app.get("/tasks", async (req, res, next) => {
   }
 });
 
-// GET Single Task
-app.get("/tasks/:id", async (req, res, next) => {
+// GET Task By ID
+app.get("/tasks/:id", authMiddleware, async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id);
 
@@ -76,72 +75,76 @@ app.get("/tasks/:id", async (req, res, next) => {
   }
 });
 
-// POST Create Task
-app.post("/tasks", async (req, res, next) => {
-  try {
-    const task = await Task.create({
-      title: req.body.title,
-      description: req.body.description,
-      completed: req.body.completed,
-      priority: req.body.priority,
-    });
+// POST Task
+// Authentication → Validation → Database
+app.post(
+  "/tasks",
+  authMiddleware,
+  validateTask,
+  async (req, res, next) => {
+    try {
+      const newTask = await Task.create(req.body);
 
-    res.status(201).json(task);
-  } catch (err) {
-    next(err);
+      res.status(201).json(newTask);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
-// PUT Update Task
-app.put("/tasks/:id", async (req, res, next) => {
+// PUT Task
+app.put("/tasks/:id", authMiddleware, async (req, res, next) => {
   try {
-    const task = await Task.findByIdAndUpdate(
+    const updatedTask = await Task.findByIdAndUpdate(
       req.params.id,
-      {
-        title: req.body.title,
-        description: req.body.description,
-        completed: req.body.completed,
-        priority: req.body.priority,
-      },
+      req.body,
       {
         new: true,
         runValidators: true,
       }
     );
 
-    if (!task) {
+    if (!updatedTask) {
       return res.status(404).json({
         message: "Task not found",
       });
     }
 
-    res.status(200).json(task);
+    res.status(200).json(updatedTask);
   } catch (err) {
     next(err);
   }
 });
 
 // DELETE Task
-app.delete("/tasks/:id", async (req, res, next) => {
-  try {
-    const task = await Task.findByIdAndDelete(req.params.id);
+app.delete(
+  "/tasks/:id",
+  authMiddleware,
+  async (req, res, next) => {
+    try {
+      const deletedTask = await Task.findByIdAndDelete(
+        req.params.id
+      );
 
-    if (!task) {
-      return res.status(404).json({
-        message: "Task not found",
+      if (!deletedTask) {
+        return res.status(404).json({
+          message: "Task not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "Task deleted successfully",
       });
+    } catch (err) {
+      next(err);
     }
-
-    res.status(200).json({
-      message: "Task deleted successfully",
-      task,
-    });
-  } catch (err) {
-    next(err);
   }
-});
+);
 
-// 404 Handler for Undefined Routes
+// =========================
+// 404 HANDLER
+// =========================
+
 app.use((req, res) => {
   res.status(404).json({
     error: "Route not found",
@@ -149,17 +152,28 @@ app.use((req, res) => {
   });
 });
 
-// Global Error Handler - Must Be Last
+// =========================
+// GLOBAL ERROR HANDLER
+// =========================
+
 app.use((err, req, res, next) => {
   console.error(err);
 
-  // Mongoose Validation Error
+  // Mongoose validation error
   if (err.name === "ValidationError") {
     return res.status(400).json({
       error: "Validation failed",
       details: Object.values(err.errors).map(
         (error) => error.message
       ),
+    });
+  }
+
+  // MongoDB duplicate key error
+  if (err.code === 11000) {
+    return res.status(409).json({
+      error: "Duplicate value",
+      message: "A user with this email already exists",
     });
   }
 
@@ -170,13 +184,16 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Other Errors
+  // Unexpected server error
   res.status(500).json({
     error: "Something went wrong",
   });
 });
 
-// Start Server
+// =========================
+// START SERVER
+// =========================
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
