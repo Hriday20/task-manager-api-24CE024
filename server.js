@@ -7,6 +7,7 @@ const Task = require("./models/Task");
 const authRoutes = require("./routes/auth");
 const authMiddleware = require("./middleware/auth");
 const validateTask = require("./middleware/validateTask");
+const cache = require("./cache");
 
 const app = express();
 const PORT = process.env.PORT || 5003;
@@ -50,7 +51,18 @@ app.get("/", (req, res) => {
 // GET All Tasks
 app.get("/tasks", authMiddleware, async (req, res, next) => {
   try {
+    const cachedTasks = cache.get("all_tasks");
+
+    if (cachedTasks !== undefined) {
+      console.log("Cache HIT: all_tasks");
+      return res.status(200).json(cachedTasks);
+    }
+
+    console.log("Cache MISS: all_tasks");
+
     const tasks = await Task.find();
+
+    cache.set("all_tasks", tasks);
 
     res.status(200).json(tasks);
   } catch (err) {
@@ -85,6 +97,9 @@ app.post(
     try {
       const newTask = await Task.create(req.body);
 
+      // Invalidate cached task list after successful write
+      cache.del("all_tasks");
+
       res.status(201).json(newTask);
     } catch (err) {
       next(err);
@@ -110,6 +125,9 @@ app.put("/tasks/:id", authMiddleware, async (req, res, next) => {
       });
     }
 
+    // Invalidate cached task list after successful write
+    cache.del("all_tasks");
+
     res.status(200).json(updatedTask);
   } catch (err) {
     next(err);
@@ -131,6 +149,9 @@ app.delete(
           message: "Task not found",
         });
       }
+
+      // Invalidate cached task list after successful write
+      cache.del("all_tasks");
 
       res.status(200).json({
         message: "Task deleted successfully",
