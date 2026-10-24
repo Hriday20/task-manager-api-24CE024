@@ -8,6 +8,10 @@ const authRoutes = require("./routes/auth");
 const authMiddleware = require("./middleware/auth");
 const validateTask = require("./middleware/validateTask");
 const cache = require("./cache");
+const taskEvents = require("./events");
+
+// Register event listeners when the server starts
+require("./listeners");
 
 const app = express();
 const PORT = process.env.PORT || 5003;
@@ -88,7 +92,7 @@ app.get("/tasks/:id", authMiddleware, async (req, res, next) => {
 });
 
 // POST Task
-// Authentication → Validation → Database
+// Authentication → Validation → Database → Response → Event
 app.post(
   "/tasks",
   authMiddleware,
@@ -100,9 +104,28 @@ app.post(
       // Invalidate cached task list after successful write
       cache.del("all_tasks");
 
+      // Send the API response immediately
+      console.log(`[API] Task response sent at ${new Date().toISOString()}`);
       res.status(201).json(newTask);
+
+      // Emit the event after the response has been sent.
+      // The listener simulates background notification processing.
+      taskEvents.emit("task-created", {
+        title: newTask.title,
+        assignedUser:
+          newTask.assignedUser ||
+          newTask.userId ||
+          newTask.user ||
+          "Not assigned",
+        taskId: newTask._id,
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) {
-      next(err);
+      if (!res.headersSent) {
+        next(err);
+      } else {
+        console.error("[Task Event Error]", err);
+      }
     }
   }
 );
@@ -153,11 +176,23 @@ app.delete(
       // Invalidate cached task list after successful write
       cache.del("all_tasks");
 
+      // Send the response first
       res.status(200).json({
         message: "Task deleted successfully",
       });
+
+      // Emit task-deleted event after the response
+      taskEvents.emit("task-deleted", {
+        title: deletedTask.title,
+        taskId: deletedTask._id,
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) {
-      next(err);
+      if (!res.headersSent) {
+        next(err);
+      } else {
+        console.error("[Task Deletion Event Error]", err);
+      }
     }
   }
 );
@@ -179,6 +214,10 @@ app.use((req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
 
   // Mongoose validation error
   if (err.name === "ValidationError") {
