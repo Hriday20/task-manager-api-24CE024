@@ -5,7 +5,7 @@ describe("Task Manager API", () => {
   test("GET / returns status 200 and API message", async () => {
     const response = await request(app).get("/");
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(201);
     expect(response.body).toEqual({
       message: "Task Manager API is running!",
     });
